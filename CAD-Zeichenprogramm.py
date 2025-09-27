@@ -3,8 +3,9 @@
 """
 Viereck CAD - Monolithische PySide6 Datei
 Enthält: Quad (Start 340cm x 180cm), Raster an, Einheit cm, Linien, Schnittpunkte,
-Drag/Move, numerische Seiten-/Winkelbearbeitung, Fixier-Mechanik für Seiten + Ecken,
+Drag/Move (ganze Figur), numerische Seiten-/Winkelbearbeitung, Fixier-Mechanik für Seiten + Ecken,
 Markierung fixierter Elemente, Screenshot, Zoom, Reset, Hilfe.
+Dateiname: main.py
 """
 from PySide6 import QtCore, QtGui, QtWidgets
 import math, sys, os
@@ -94,7 +95,7 @@ class CADCanvas(QtWidgets.QWidget):
         self.px_per_mm_base = dpi / 25.4
         self.scale = 1.0
 
-        self.unit = 'cm'  # start in cm as requested
+        self.unit = 'cm'
         self.grid_mm = 10.0
         self.show_grid = True
 
@@ -102,17 +103,14 @@ class CADCanvas(QtWidgets.QWidget):
         self.user_lines = []
         self.intersection_handles = []
 
-        # constraints
         self.fixed_sides = [False, False, False, False]
         self.fixed_corners = [False, False, False, False]
         self.fixed_side_values_mm = [None, None, None, None]
         self.fixed_corner_values_deg = [None, None, None, None]
 
-        # last selected (for toolbar toggle)
         self.last_side_idx = None
         self.last_corner_idx = None
 
-        # interaction states
         self.drawing_line = False
         self.temp_p1 = None
         self.temp_p2 = None
@@ -151,12 +149,12 @@ class CADCanvas(QtWidgets.QWidget):
     def init_quad_default(self):
         w = max(100, self.width())
         h = max(100, self.height())
+        # ensure metrics are updated before using grid
+        self.update_scale_dependent_metrics()
         gs = self.grid_step_px
 
-        #Seitenlängen beim Start in cm
-        quad_w_mm = 340.0 * UNIT_TO_MM['cm']  # 340 cm in mm
-        quad_h_mm = 180.0 * UNIT_TO_MM['cm']  # 180 cm in mm
-
+        quad_w_mm = 340.0 * UNIT_TO_MM['cm']
+        quad_h_mm = 180.0 * UNIT_TO_MM['cm']
 
         quad_w_px = mm_to_px(quad_w_mm, self.effective_px_per_mm())
         quad_h_px = mm_to_px(quad_h_mm, self.effective_px_per_mm())
@@ -186,7 +184,6 @@ class CADCanvas(QtWidgets.QWidget):
         self._recalc_user_lines()
         self.auto_adjust_scale_if_needed()
         self.update()
-
 
     def center_quad(self):
         if not self.quad:
@@ -270,7 +267,6 @@ class CADCanvas(QtWidgets.QWidget):
                 length_mm = px_to_mm(length_px, self.effective_px_per_mm())
 
                 txt = self.format_length_mm(length_mm)
-                # if fixed and known value, show fixed value exactly
                 if self.fixed_sides[i] and self.fixed_side_values_mm[i] is not None:
                     txt = self.format_length_mm(self.fixed_side_values_mm[i])
 
@@ -418,24 +414,21 @@ class CADCanvas(QtWidgets.QWidget):
 
     def _paint_grid(self, qp: QtGui.QPainter):
         step_px = self.grid_step_px
-        if step_px < 6:
-            # gröberes Raster (z. B. 5 Felder = 50 mm)
-            step_px *= 5
-
+        draw_step = step_px
+        if draw_step < 6:
+            draw_step = step_px * 5
         pen = QtGui.QPen(QtGui.QColor(230,230,230))
         pen.setWidth(1)
         qp.setPen(pen)
-
         w = self.width(); h = self.height()
         x = 0
         while x <= w:
             qp.drawLine(x, 0, x, h)
-            x += step_px
+            x += draw_step
         y = 0
         while y <= h:
             qp.drawLine(0, y, w, y)
-            y += step_px
-
+            y += draw_step
 
     def mousePressEvent(self, ev: QtGui.QMouseEvent):
         x = ev.position().x(); y = ev.position().y()
@@ -464,7 +457,8 @@ class CADCanvas(QtWidgets.QWidget):
             if sidx is not None:
                 self.last_side_idx = sidx
                 if self.fixed_sides[sidx]:
-                    self.parentWidget().statusBar().showMessage("Seite ist fixiert (orange) — zum Bewegen zuerst lösen.", 4000)
+                    if self.parentWidget() is not None:
+                        self.parentWidget().statusBar().showMessage("Seite ist fixiert (orange) — zum Bewegen zuerst lösen.", 4000)
                     return
                 self.dragging_side = True
                 self.drag_side_idx = sidx
@@ -982,6 +976,7 @@ class CADCanvas(QtWidgets.QWidget):
         self.intersection_handles = uniq
 
     def auto_adjust_scale_if_needed(self):
+        if not self.quad: return
         margin_px = mm_to_px(MARGIN_MM, self.effective_px_per_mm())
         left = min(p[0] for p in self.quad)
         right = max(p[0] for p in self.quad)
@@ -1040,6 +1035,7 @@ class CADCanvas(QtWidgets.QWidget):
         self.update()
 
     def pan_view(self, dx_px, dy_px):
+        if not self.quad: return
         self.quad = [(p[0]+dx_px, p[1]+dy_px) for p in self.quad]
         for ln in self.user_lines:
             ln['p1'] = (ln['p1'][0]+dx_px, ln['p1'][1]+dy_px)
@@ -1048,23 +1044,23 @@ class CADCanvas(QtWidgets.QWidget):
 
     def _make_point_string(self, p): return f"({p[0]:.1f}, {p[1]:.1f})"
 
-    # Constraint toggles for toolbar
     def toggle_fix_side(self):
         idx = self.last_side_idx
         if idx is None:
             QtWidgets.QMessageBox.information(self, "Seite fixieren", "Keine Seite ausgewählt. Klicke zuerst auf eine Seite (Linksklick).")
             return
         if not self.fixed_sides[idx]:
-            # set fixed to current measured length
             a = self.quad[idx]; b = self.quad[(idx+1)%4]
             length_mm = px_to_mm(dist(a,b), self.effective_px_per_mm())
             self.fixed_side_values_mm[idx] = length_mm
             self.fixed_sides[idx] = True
-            self.parentWidget().statusBar().showMessage(f"Seite {idx+1} fixiert ({self.format_length_mm(length_mm)})", 4000)
+            if self.parentWidget() is not None:
+                self.parentWidget().statusBar().showMessage(f"Seite {idx+1} fixiert ({self.format_length_mm(length_mm)})", 4000)
         else:
             self.fixed_sides[idx] = False
             self.fixed_side_values_mm[idx] = None
-            self.parentWidget().statusBar().showMessage(f"Seite {idx+1} gelöst", 3000)
+            if self.parentWidget() is not None:
+                self.parentWidget().statusBar().showMessage(f"Seite {idx+1} gelöst", 3000)
         self.update()
 
     def toggle_fix_corner(self):
@@ -1078,11 +1074,13 @@ class CADCanvas(QtWidgets.QWidget):
             interior = 360-ang if ang>180 else ang
             self.fixed_corner_values_deg[idx] = interior
             self.fixed_corners[idx] = True
-            self.parentWidget().statusBar().showMessage(f"Ecke {idx+1} fixiert ({interior:.1f}°)", 4000)
+            if self.parentWidget() is not None:
+                self.parentWidget().statusBar().showMessage(f"Ecke {idx+1} fixiert ({interior:.1f}°)", 4000)
         else:
             self.fixed_corners[idx] = False
             self.fixed_corner_values_deg[idx] = None
-            self.parentWidget().statusBar().showMessage(f"Ecke {idx+1} gelöst", 3000)
+            if self.parentWidget() is not None:
+                self.parentWidget().statusBar().showMessage(f"Ecke {idx+1} gelöst", 3000)
         self.update()
 
 class MainWindow(QtWidgets.QMainWindow):
