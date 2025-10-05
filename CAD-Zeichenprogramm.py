@@ -9,8 +9,39 @@ Dateiname: main.py
 """
 from PySide6 import QtCore, QtGui, QtWidgets
 import math, sys, os
+import requests
+import subprocess
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
+GITHUB_API = "https://api.github.com/repos/clanmonsterxd-cmd/CAD-Zeichner/releases/latest"
+
+def check_for_updates_and_run_updater():
+    try:
+        resp = requests.get(GITHUB_API, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        latest_version = data["tag_name"].lstrip("v")
+
+        if latest_version > APP_VERSION:
+            exe_path = sys.argv[0]
+            exe_dir = os.path.dirname(exe_path)
+            updater_path = os.path.join(exe_dir, "updater.exe")
+
+            if os.path.exists(updater_path):
+                QtWidgets.QMessageBox.information(
+                    None, "Update verfügbar",
+                    f"Neue Version {latest_version} gefunden!\n\n"
+                    "Das Programm wird geschlossen und der Updater gestartet."
+                )
+                subprocess.Popen([updater_path, exe_path], shell=True)
+                QtWidgets.QApplication.quit()
+            else:
+                QtWidgets.QMessageBox.warning(
+                    None, "Updater fehlt",
+                    "Updater.exe nicht gefunden. Bitte manuell aktualisieren."
+                )
+    except Exception as e:
+        print("Update-Check fehlgeschlagen:", e)
 
 MARGIN_MM = 30.0
 CORNER_RADIUS_MM = 6.0
@@ -105,6 +136,9 @@ class CADCanvas(QtWidgets.QWidget):
 
         self.fixed_sides = [False, False, False, False]
         self.fixed_corners = [False, False, False, False]
+        self.initial_quad = None  # Referenz für Ausrichtung nach Änderungen
+        self.side_lengths = [0.0, 0.0, 0.0, 0.0]
+        self.angle_values = [90.0, 90.0, 90.0, 90.0]
         self.fixed_side_values_mm = [None, None, None, None]
         self.fixed_corner_values_deg = [None, None, None, None]
 
@@ -149,40 +183,52 @@ class CADCanvas(QtWidgets.QWidget):
     def init_quad_default(self):
         w = max(100, self.width())
         h = max(100, self.height())
-        # ensure metrics are updated before using grid
         self.update_scale_dependent_metrics()
         gs = self.grid_step_px
-
+        # Zielgröße in cm -> Pixel
         quad_w_mm = 340.0 * UNIT_TO_MM['cm']
         quad_h_mm = 180.0 * UNIT_TO_MM['cm']
-
         quad_w_px = mm_to_px(quad_w_mm, self.effective_px_per_mm())
         quad_h_px = mm_to_px(quad_h_mm, self.effective_px_per_mm())
-
         cx = w / 2
         cy = h / 2
-
-        left = round((cx - quad_w_px/2) / gs) * gs
-        top = round((cy - quad_h_px/2) / gs) * gs
+        # Position berechnen
+        left = cx - quad_w_px / 2
+        top = cy - quad_h_px / 2
         right = left + quad_w_px
         bottom = top + quad_h_px
-
+        # Viereck erstellen
         self.quad = [
             (left, top),
             (right, top),
             (right, bottom),
             (left, bottom)
         ]
+        # Nur am Raster ausrichten, wenn das Raster aktiv ist
+        if self.show_grid and gs > 1:
+            # Mittelpunkt des Vierecks
+            cx = sum(p[0] for p in self.quad) / 4.0
+            cy = sum(p[1] for p in self.quad) / 4.0
+            # Nächstgelegenen Raster-Mittelpunkt finden
+            cx_snap = round(cx / gs) * gs
+            cy_snap = round(cy / gs) * gs
+            # Verschiebung berechnen, um Zentrum zu snappen
+            dx = cx_snap - cx
+            dy = cy_snap - cy
+            # Ganze Figur verschieben, statt jede Ecke einzeln
+            self.quad = [(p[0] + dx, p[1] + dy) for p in self.quad]
 
+        # Status zurücksetzen
         self.fixed_sides = [False, False, False, False]
         self.fixed_corners = [False, False, False, False]
         self.fixed_side_values_mm = [None, None, None, None]
         self.fixed_corner_values_deg = [None, None, None, None]
         self.last_side_idx = None
         self.last_corner_idx = None
-
+        # Aktualisieren
         self._recalc_user_lines()
         self.auto_adjust_scale_if_needed()
+        self.initial_quad = list(self.quad)
         self.update()
 
     def center_quad(self):
@@ -820,121 +866,146 @@ class CADCanvas(QtWidgets.QWidget):
         return best, best_info[0], best_info[1]
 
     def _edit_corner_angle(self, idx):
-        prev = self.quad[(idx+3)%4]; cur = self.quad[idx]; nxt = self.quad[(idx+1)%4]
+        prev, cur, nxt = self.quad[(idx+3)%4], self.quad[idx], self.quad[(idx+1)%4]
         ang = angle_signed(prev, cur, nxt)
-        interior = 360-ang if ang>180 else ang
+        interior = 360 - ang if ang > 180 else ang
 
-        if self.fixed_corners[idx]:
-            mb = QtWidgets.QMessageBox(self)
-            mb.setWindowTitle("Ecke fixiert")
-            mb.setText(f"Ecke {idx+1} ist fixiert ({self.fixed_corner_values_deg[idx]:.3f}°). Möchten Sie Fixierung lösen, um zu bearbeiten?")
-            mb.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
-            rv = mb.exec()
-            if rv == QtWidgets.QMessageBox.Yes:
-                self.fixed_corners[idx] = False
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Winkel an Ecke {idx+1}")
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(0.1, 179.9)
+        spin.setDecimals(1)
+        spin.setValue(interior)
+        layout.addWidget(QtWidgets.QLabel("Winkel in °:"))
+        layout.addWidget(spin)
+
+        cb = QtWidgets.QCheckBox("Fixieren")
+        cb.setChecked(self.fixed_corners[idx])
+        layout.addWidget(cb)
+
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        layout.addWidget(btns)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+
+        if dlg.exec():
+            val = spin.value()
+
+            # Änderung immer übernehmen
+            self._apply_corner_angle_change(idx, val)
+            self.angle_values[idx] = val
+
+            # Fixierstatus übernehmen
+            was_fixed = self.fixed_corners[idx]
+            is_fixed = cb.isChecked()
+            self.fixed_corners[idx] = is_fixed
+
+            if is_fixed:
+                self.fixed_corner_values_deg[idx] = val
+            else:
                 self.fixed_corner_values_deg[idx] = None
-            else:
-                return
 
-        dlg = QtWidgets.QInputDialog(self)
-        dlg.setInputMode(QtWidgets.QInputDialog.DoubleInput)
-        dlg.setDoubleDecimals(3)
-        dlg.setDoubleRange(0.0, 360.0)
-        dlg.setDoubleValue(interior)
-        dlg.setWindowTitle(f"Winkel ändern (Ecke {idx+1})")
-        dlg.setLabelText(f"Neuer Innenwinkel in Grad (aktuell {interior:.3f}°):")
-        ok = dlg.exec()
-        if not ok:
-            return
-        new_ang = dlg.doubleValue()
-        new_ang_effective = (new_ang + 180.0) % 360.0
-        ref_v = (prev[0]-cur[0], prev[1]-cur[1])
-        ref_ang = math.atan2(ref_v[1], ref_v[0])
-        new_ang_rad = math.radians(new_ang_effective)
-        new_dir = ref_ang + (math.pi - new_ang_rad)
-        L = dist(cur, nxt)
-        new_nxt = (cur[0] + L*math.cos(new_dir), cur[1] + L*math.sin(new_dir))
-        self.quad[(idx+1)%4] = new_nxt
-        self._make_quad_consistent_after_corner_change(idx)
-        self.auto_adjust_scale_if_needed()
-        self._recalc_user_lines()
-        self.update()
+            # Feedback
+            if was_fixed != is_fixed and self.parentWidget() is not None:
+                msg = (f"Ecke {idx+1} fixiert ({val:.1f}°)"
+                    if is_fixed else f"Ecke {idx+1} gelöst")
+                self.parentWidget().statusBar().showMessage(msg, 3000)
 
-    def _edit_side_length(self, sidx, t, click_pos):
-        a = self.quad[sidx]; b = self.quad[(sidx+1)%4]
-        length_px = dist(a,b)
+            self.update()
+
+    def _edit_side_length(self, idx, t, pos):
+        a, b = self.quad[idx], self.quad[(idx+1)%4]
+        length_px = dist(a, b)
         length_mm = px_to_mm(length_px, self.effective_px_per_mm())
+        length_cm = length_mm / 10.0
 
-        if self.fixed_sides[sidx]:
-            mb = QtWidgets.QMessageBox(self)
-            mb.setWindowTitle("Seite fixiert")
-            mb.setText(f"Seite {sidx+1} ist fixiert ({self.fixed_side_values_mm[sidx]:.1f} mm). Möchten Sie Fixierung lösen, um zu bearbeiten?")
-            mb.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
-            rv = mb.exec()
-            if rv == QtWidgets.QMessageBox.Yes:
-                self.fixed_sides[sidx] = False
-                self.fixed_side_values_mm[sidx] = None
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Seite {idx+1}")
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(0.1, 9999.0)
+        spin.setDecimals(1)
+        spin.setValue(length_cm)
+        layout.addWidget(QtWidgets.QLabel("Länge in cm:"))
+        layout.addWidget(spin)
+
+        cb = QtWidgets.QCheckBox("Fixieren")
+        cb.setChecked(self.fixed_sides[idx])
+        layout.addWidget(cb)
+
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        layout.addWidget(btns)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+
+        if dlg.exec():
+            val_cm = spin.value()
+            val_mm = val_cm * 10.0
+
+            # Änderung IMMER übernehmen
+            self._apply_side_length_change(idx, val_mm)
+            self.side_lengths[idx] = val_mm
+
+            # Jetzt Fixierstatus übernehmen
+            was_fixed = self.fixed_sides[idx]
+            is_fixed = cb.isChecked()
+            self.fixed_sides[idx] = is_fixed
+
+            if is_fixed:
+                self.fixed_side_values_mm[idx] = val_mm
             else:
-                return
+                self.fixed_side_values_mm[idx] = None
 
-        factor = UNIT_TO_MM.get(self.unit, 1.0)
-        dlg = QtWidgets.QInputDialog(self)
-        dlg.setInputMode(QtWidgets.QInputDialog.TextInput)
-        dlg.setWindowTitle(f"Seitenlänge ändern (Seite {sidx+1})")
-        dlg.setLabelText(f"Aktuelle Länge: {self.format_length_mm(length_mm)}\nNeue Länge in {UNIT_LABEL[self.unit]} (Dezimalpunkt oder Komma):")
-        ok = dlg.exec()
-        if not ok:
-            return
-        s = dlg.textValue().strip().replace(',', '.')
-        try:
-            new_length_unit = float(s)
-            if new_length_unit <= 0:
-                return
-        except:
-            return
-        new_length_mm = new_length_unit * factor
-        delta_mm = new_length_mm - length_mm
-        delta_px = delta_mm * self.effective_px_per_mm()
-        vx = b[0]-a[0]; vy = b[1]-a[1]
-        seg_len_px = math.hypot(vx,vy)
-        if seg_len_px == 0:
-            return
-        ux, uy = vx/seg_len_px, vy/seg_len_px
-        s1 = -delta_px*(1 - t)
-        s2 = delta_px * t
-        new_a = (a[0] + s1*ux, a[1] + s1*uy)
-        new_b = (b[0] + s2*ux, b[1] + s2*uy)
-        self.quad[sidx] = new_a
-        self.quad[(sidx+1)%4] = new_b
-        self._make_quad_consistent_after_side_change(sidx)
-        self.auto_adjust_scale_if_needed()
-        self._recalc_user_lines()
-        self.update()
+            # Feedback
+            if was_fixed != is_fixed and self.parentWidget() is not None:
+                msg = (f"Seite {idx+1} fixiert ({self.format_length_mm(val_mm)})"
+                    if is_fixed else f"Seite {idx+1} gelöst")
+                self.parentWidget().statusBar().showMessage(msg, 3000)
+
+            self.update()
 
     def _make_quad_consistent_after_side_change(self, side_idx):
-        if not self.quad: return
-        cx_old = sum(p[0] for p in self.quad)/4.0
-        cy_old = sum(p[1] for p in self.quad)/4.0
-        cx_new = sum(p[0] for p in self.quad)/4.0
-        cy_new = sum(p[1] for p in self.quad)/4.0
-        dx = cx_old - cx_new
-        dy = cy_old - cy_new
-        other_idxs = [i for i in range(4) if i not in (side_idx, (side_idx+1)%4)]
-        for oi in other_idxs:
-            self.quad[oi] = (self.quad[oi][0] + dx, self.quad[oi][1] + dy)
+        if not self.quad:
+            return
+
+        # Mittelpunkt vor Änderung (Referenz)
+        cx_ref = sum(p[0] for p in self.quad) / 4.0
+        cy_ref = sum(p[1] for p in self.quad) / 4.0
+
+        cx_now = sum(p[0] for p in self.quad) / 4.0
+        cy_now = sum(p[1] for p in self.quad) / 4.0
+
+        dx = cx_ref - cx_now
+        dy = cy_ref - cy_now
+
+        # Nur verschieben, wenn die Seite nicht fixiert ist
+        for i in range(4):
+            if self.fixed_sides[i]:
+                continue
+            self.quad[i] = (self.quad[i][0] + dx, self.quad[i][1] + dy)
 
     def _make_quad_consistent_after_corner_change(self, corner_idx):
-        if not self.quad: return
-        cx_old = sum(p[0] for p in self.quad)/4.0
-        cy_old = sum(p[1] for p in self.quad)/4.0
-        cx_new = sum(p[0] for p in self.quad)/4.0
-        cy_new = sum(p[1] for p in self.quad)/4.0
-        dx = cx_old - cx_new
-        dy = cy_old - cy_new
+        if not self.quad:
+            return
+
+        # Mittelpunkt vor Änderung (Referenz)
+        cx_ref = sum(p[0] for p in self.quad) / 4.0
+        cy_ref = sum(p[1] for p in self.quad) / 4.0
+
+        cx_now = sum(p[0] for p in self.quad) / 4.0
+        cy_now = sum(p[1] for p in self.quad) / 4.0
+
+        dx = cx_ref - cx_now
+        dy = cy_ref - cy_now
+
+        # Nur verschieben, wenn die Ecke nicht fixiert ist
         for i in range(4):
-            if i == corner_idx:
+            if self.fixed_corners[i]:
                 continue
-            self.quad[i] = (self.quad[i][0] + dx/3.0, self.quad[i][1] + dy/3.0)
+            self.quad[i] = (self.quad[i][0] + dx, self.quad[i][1] + dy)
 
     def _recalc_user_lines(self):
         for ln in self.user_lines:
@@ -1083,6 +1154,80 @@ class CADCanvas(QtWidgets.QWidget):
                 self.parentWidget().statusBar().showMessage(f"Ecke {idx+1} gelöst", 3000)
         self.update()
 
+    def _apply_side_length_change(self, idx, new_len_mm):
+        if self.fixed_sides[idx]:
+            return  # keine Änderung erlaubt
+        a, b = self.quad[idx], self.quad[(idx+1)%4]
+        vec = (b[0]-a[0], b[1]-a[1])
+        old_len = math.hypot(*vec)
+        if old_len == 0:
+            return
+        scale = (new_len_mm * self.px_per_mm) / old_len
+        # Seitenrichtung beibehalten
+        b_new = (a[0] + vec[0]*scale, a[1] + vec[1]*scale)
+        self.quad[(idx+1)%4] = b_new
+        self._realign_to_initial_position()
+
+    def _apply_corner_angle_change(self, idx, new_angle_deg):
+        if self.fixed_corners[idx]:
+            return
+        # Nachbarn und aktueller Winkel
+        prev = self.quad[(idx + 3) % 4]
+        cur = self.quad[idx]
+        nxt = self.quad[(idx + 1) % 4]
+        # aktuelle Vektoren
+        v_prev = (prev[0] - cur[0], prev[1] - cur[1])
+        v_next = (nxt[0] - cur[0], nxt[1] - cur[1])
+        len_prev = math.hypot(*v_prev)
+        len_next = math.hypot(*v_next)
+        if len_prev == 0 or len_next == 0:
+            return
+        # aktueller Innenwinkel
+        current_signed = angle_signed(prev, cur, nxt)
+        current_interior = 360 - current_signed if current_signed > 180 else current_signed
+        # Zielwinkel
+        target = new_angle_deg
+        delta = math.radians(target - current_interior)
+        # Drehrichtung bestimmen (links/rechts)
+        sign = 1.0
+        if current_signed > 180:  # Reflexwinkel
+            sign = -1.0
+        # Rotation auf v_next anwenden
+        cosd = math.cos(sign * delta)
+        sind = math.sin(sign * delta)
+        rx = v_next[0] * cosd - v_next[1] * sind
+        ry = v_next[0] * sind + v_next[1] * cosd
+        new_nxt = (cur[0] + rx, cur[1] + ry)
+        self.quad[(idx + 1) % 4] = new_nxt
+        # Nach Änderung an ursprüngliche Lage ausrichten
+        self._realign_to_initial_position()
+
+    def _realign_quad_center(self):
+        # Nach jeder Änderung das Viereck zentriert halten.
+        if not self.quad:
+            return
+        cx_ref = self.width()/2
+        cy_ref = self.height()/2
+        cx = sum(p[0] for p in self.quad)/4
+        cy = sum(p[1] for p in self.quad)/4
+        dx, dy = cx_ref - cx, cy_ref - cy
+        self.quad = [(p[0]+dx, p[1]+dy) for p in self.quad]
+        self._recalc_user_lines()
+
+    def _realign_to_initial_position(self):
+        # Nach jeder numerischen Änderung das Viereck an ursprünglicher Lage ausrichten.
+        if not self.initial_quad:
+            self.initial_quad = list(self.quad)
+            return
+        cx_ref = sum(p[0] for p in self.initial_quad)/4
+        cy_ref = sum(p[1] for p in self.initial_quad)/4
+        cx_now = sum(p[0] for p in self.quad)/4
+        cy_now = sum(p[1] for p in self.quad)/4
+        dx, dy = cx_ref - cx_now, cy_ref - cy_now
+        self.quad = [(p[0]+dx, p[1]+dy) for p in self.quad]
+        self._recalc_user_lines()
+        self.update()
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1100,6 +1245,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Rechtsklick + Ziehen: Linie zeichnen | Links: Ecken/Seiten editieren | Mitte: Ziehen/Bewegen")
         QtCore.QTimer.singleShot(0, self._go_fullscreen)
         self.show()
+        QtCore.QTimer.singleShot(2000, check_for_updates_and_run_updater)
 
     def _go_fullscreen(self):
         try:
@@ -1139,14 +1285,6 @@ class MainWindow(QtWidgets.QMainWindow):
         act_grid.setChecked(True)
         act_grid.toggled.connect(self._toggle_grid)
         tb.addAction(act_grid)
-
-        act_fix_side = QtGui.QAction("Seite fixieren / lösen", self)
-        act_fix_side.triggered.connect(self._toggle_fix_side)
-        tb.addAction(act_fix_side)
-
-        act_fix_corner = QtGui.QAction("Ecke fixieren / lösen", self)
-        act_fix_corner.triggered.connect(self._toggle_fix_corner)
-        tb.addAction(act_fix_corner)
 
         act_screenshot = QtGui.QAction("Screenshot", self)
         act_screenshot.triggered.connect(self._screenshot)
@@ -1193,12 +1331,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_help(self):
         text = (
             "Kurzbedienung:<br>"
-            "- Rechtsklick + Ziehen: neue Linie zeichnen (snap an Seiten/anderen Linien/ Raster).<br>"
-            "- Mittel-Taste (Klick + Ziehen): Griffe bewegen (Seite, Linie, Schnittpunkt) oder ganze Figur verschieben.<br>"
-            "- Linksklick auf Ecke: Winkel numerisch ändern.<br>"
-            "- Linksklick auf Seite: Seitenlänge numerisch ändern.<br>"
-            "- Klicke zuerst eine Seite/Ecke an (Linksklick), dann im Toolbar 'Seite fixieren'/'Ecke fixieren' drücken.<br>"
-            "Fixierte Seiten/Ecken sind orange markiert und können nicht bewegt werden, solange sie fixiert sind."
+            "- Rechtsklick + Ziehen: neue Linie zeichnen <br>"
+            "   (snap an Seiten/anderen Linien/ Raster).<br>"
+            "- Mittel-Taste (Klick + Ziehen): Ganze Figur verschieben.<br>"
+            "- Linksklick auf Ecke: Winkel numerisch ändern und fixieren.<br>"
+            "- Linksklick auf Seite: Seitenlänge numerisch ändern <br>"
+            "   und fixieren.<br>"
+            "- Ist ein Wert ersteinmal fixiert muss mann, <br>"
+            "   um Ihn zu ändern, die Fixierung erst aufheben.<br>"
+            "<br>"
+            "Fixierte Seiten/Ecken sind orange markiert <br>"
+            "und können nicht bewegt werden, solange sie fixiert sind."
         )
         dlg = QtWidgets.QMessageBox(self)
         dlg.setWindowTitle("Hilfe / Bedienung")
