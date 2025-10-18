@@ -12,7 +12,7 @@ import math, sys, os
 import requests
 import subprocess
 
-APP_VERSION = "4.0.0"
+APP_VERSION = "5.0.0"
 GITHUB_API = "https://api.github.com/repos/clanmonsterxd-cmd/CAD-Zeichner/releases/latest"
 
 def _fallback_is_newer(latest: str, current: str) -> bool:
@@ -32,6 +32,11 @@ def check_for_updates_threaded(parent=None):
     """Runs the GitHub update check in a background thread with graceful fallbacks."""
     import threading
     try:
+        import requests
+    except ImportError:
+        print("Update-Check übersprungen: requests nicht installiert.")
+        return
+    try:
         from packaging.version import parse as vparse
     except ImportError:
         vparse = None
@@ -48,7 +53,8 @@ def check_for_updates_threaded(parent=None):
 
     def run_check():
         try:
-            resp = requests.get(GITHUB_API, timeout=5)
+            headers = {"User-Agent": f"Viereck-CAD/{APP_VERSION}"}
+            resp = requests.get(GITHUB_API, headers=headers, timeout=5)
             resp.raise_for_status()
             data = resp.json()
             latest_version = (data.get("tag_name") or "").lstrip("v")
@@ -164,6 +170,9 @@ class CADCanvas(QtWidgets.QWidget):
 
         self.fixed_sides = [False, False, False, False]
         self.fixed_corners = [False, False, False, False]
+        self.adjustable_sides = [False, False, False, False]
+        self.adjustable_corners = [False, False, False, False]
+        self.point_locked = [False, False, False, False]
         self.initial_quad = None  # Referenz für Ausrichtung nach Änderungen
         self.side_lengths = [0.0, 0.0, 0.0, 0.0]
         self.angle_values = [90.0, 90.0, 90.0, 90.0]
@@ -175,6 +184,7 @@ class CADCanvas(QtWidgets.QWidget):
         self._last_user_lines_signature = None
         self.settings = QtCore.QSettings("clanmonsterxd-cmd", "CAD-Zeichner")
         self.show_debug_overlay = self.settings.value("debug_overlay", False, type=bool)
+        self._constraint_reference_quad = None
 
         self.last_side_idx = None
         self.last_corner_idx = None
@@ -218,6 +228,12 @@ class CADCanvas(QtWidgets.QWidget):
     def has_active_constraints(self) -> bool:
         return any(self.fixed_sides) or any(self.fixed_corners)
 
+    def _update_constraint_reference(self):
+        if self.has_active_constraints() and self.quad:
+            self._constraint_reference_quad = [tuple(p) for p in self.quad]
+        else:
+            self._constraint_reference_quad = None
+
     def init_quad_default(self):
         w = max(100, self.width())
         h = max(100, self.height())
@@ -259,12 +275,16 @@ class CADCanvas(QtWidgets.QWidget):
         # Status zurücksetzen
         self.fixed_sides = [False, False, False, False]
         self.fixed_corners = [False, False, False, False]
+        self.adjustable_sides = [False, False, False, False]
+        self.adjustable_corners = [False, False, False, False]
+        self.point_locked = [False, False, False, False]
         self.fixed_side_values_mm = [None, None, None, None]
         self.fixed_side_values_px = [None, None, None, None]
         self.fixed_corner_values_deg = [None, None, None, None]
         self.last_side_idx = None
         self.last_corner_idx = None
         self._last_user_lines_signature = None
+        self._constraint_reference_quad = None
         # Aktualisieren
         self._recalc_user_lines()
         self.auto_adjust_scale_if_needed()
@@ -921,9 +941,22 @@ class CADCanvas(QtWidgets.QWidget):
         layout.addWidget(QtWidgets.QLabel("Winkel in Grad:"))
         layout.addWidget(spin)
 
-        cb = QtWidgets.QCheckBox("Fixieren")
-        cb.setChecked(self.fixed_corners[idx])
-        layout.addWidget(cb)
+        cb_fix = QtWidgets.QCheckBox("Fixieren")
+        cb_fix.setChecked(self.fixed_corners[idx])
+        layout.addWidget(cb_fix)
+
+        cb_adjust = QtWidgets.QCheckBox("Veränderbar")
+        cb_adjust.setChecked(self.adjustable_corners[idx])
+        layout.addWidget(cb_adjust)
+
+        def on_fix_state_changed(state: int):
+            enabled = state != QtCore.Qt.Checked
+            cb_adjust.setEnabled(enabled)
+            if not enabled:
+                cb_adjust.setChecked(False)
+
+        cb_fix.stateChanged.connect(on_fix_state_changed)
+        on_fix_state_changed(QtCore.Qt.Checked if cb_fix.isChecked() else QtCore.Qt.Unchecked)
 
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         layout.addWidget(btns)
@@ -932,16 +965,18 @@ class CADCanvas(QtWidgets.QWidget):
 
         if dlg.exec():
             val = round(spin.value())
+            is_adjustable = cb_adjust.isChecked()
+            self.adjustable_corners[idx] = is_adjustable
 
             was_fixed = self.fixed_corners[idx]
-            is_fixed = cb.isChecked()
+            is_fixed = cb_fix.isChecked()
 
             parent = self.parentWidget()
             show_status = getattr(parent, "show_status_message", None) if parent is not None else None
 
             if was_fixed and is_fixed:
                 if callable(show_status):
-                    show_status(f"Ecke {idx+1} ist fixiert und wurde nicht geaendert.", 3000)
+                    show_status(f"Ecke {idx+1} ist fixiert und wurde nicht geändert.", 3000)
             else:
                 if was_fixed and not is_fixed:
                     self.fixed_corners[idx] = False
@@ -977,12 +1012,25 @@ class CADCanvas(QtWidgets.QWidget):
         spin.setRange(0.1, 9999.0)
         spin.setDecimals(1)
         spin.setValue(length_cm)
-        layout.addWidget(QtWidgets.QLabel("Laenge in cm:"))
+        layout.addWidget(QtWidgets.QLabel("Länge in cm:"))
         layout.addWidget(spin)
 
-        cb = QtWidgets.QCheckBox("Fixieren")
-        cb.setChecked(self.fixed_sides[idx])
-        layout.addWidget(cb)
+        cb_fix = QtWidgets.QCheckBox("Fixieren")
+        cb_fix.setChecked(self.fixed_sides[idx])
+        layout.addWidget(cb_fix)
+
+        cb_adjust = QtWidgets.QCheckBox("Veränderbar")
+        cb_adjust.setChecked(self.adjustable_sides[idx])
+        layout.addWidget(cb_adjust)
+
+        def on_fix_state_changed(state: int):
+            enabled = state != QtCore.Qt.Checked
+            cb_adjust.setEnabled(enabled)
+            if not enabled:
+                cb_adjust.setChecked(False)
+
+        cb_fix.stateChanged.connect(on_fix_state_changed)
+        on_fix_state_changed(QtCore.Qt.Checked if cb_fix.isChecked() else QtCore.Qt.Unchecked)
 
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         layout.addWidget(btns)
@@ -992,16 +1040,18 @@ class CADCanvas(QtWidgets.QWidget):
         if dlg.exec():
             val_cm = round(spin.value())
             val_mm = val_cm * 10.0
+            is_adjustable = cb_adjust.isChecked()
+            self.adjustable_sides[idx] = is_adjustable
 
             was_fixed = self.fixed_sides[idx]
-            is_fixed = cb.isChecked()
+            is_fixed = cb_fix.isChecked()
 
             parent = self.parentWidget()
             show_status = getattr(parent, "show_status_message", None) if parent is not None else None
 
             if was_fixed and is_fixed:
                 if callable(show_status):
-                    show_status(f"Seite {idx+1} ist fixiert und wurde nicht geaendert.", 3000)
+                    show_status(f"Seite {idx+1} ist fixiert und wurde nicht geändert.", 3000)
                 return
 
             if was_fixed and not is_fixed:
@@ -1208,7 +1258,7 @@ class CADCanvas(QtWidgets.QWidget):
     def toggle_fix_side(self):
         idx = self.last_side_idx
         if idx is None:
-            QtWidgets.QMessageBox.information(self, "Seite fixieren", "Keine Seite ausgewaehlt. Klicke zuerst auf eine Seite (Linksklick).")
+            QtWidgets.QMessageBox.information(self, "Seite fixieren", "Keine Seite ausgewählt. Klicke zuerst auf eine Seite (Linksklick).")
             return
         parent = self.parentWidget()
         show_status = getattr(parent, "show_status_message", None) if parent is not None else None
@@ -1216,24 +1266,25 @@ class CADCanvas(QtWidgets.QWidget):
             a = self.quad[idx]
             b = self.quad[(idx + 1) % 4]
             length_mm = px_to_mm(dist(a, b), self.effective_px_per_mm())
-            length_mm = round(length_mm)
             self.fixed_side_values_mm[idx] = length_mm
             self.fixed_side_values_px[idx] = dist(a, b)
             self.fixed_sides[idx] = True
+            self.adjustable_sides[idx] = False
             if callable(show_status):
                 show_status(f"Seite {idx + 1} fixiert ({self.format_length_mm(length_mm)})", 4000)
         else:
             self.fixed_sides[idx] = False
             self.fixed_side_values_mm[idx] = None
             self.fixed_side_values_px[idx] = None
+            self.adjustable_sides[idx] = False
             if callable(show_status):
                 show_status(f"Seite {idx + 1} gelöst", 3000)
+        self._update_constraint_reference()
         self.solve_constraints()
-
     def toggle_fix_corner(self):
         idx = self.last_corner_idx
         if idx is None:
-            QtWidgets.QMessageBox.information(self, "Ecke fixieren", "Keine Ecke ausgewaehlt. Klicke zuerst auf eine Ecke (Linksklick).")
+            QtWidgets.QMessageBox.information(self, "Ecke fixieren", "Keine Ecke ausgewählt. Klicke zuerst auf eine Ecke (Linksklick).")
             return
         parent = self.parentWidget()
         show_status = getattr(parent, "show_status_message", None) if parent is not None else None
@@ -1243,18 +1294,19 @@ class CADCanvas(QtWidgets.QWidget):
             nxt = self.quad[(idx + 1) % 4]
             ang = angle_signed(prev, cur, nxt)
             interior = 360 - ang if ang > 180 else ang
-            interior = round(interior)
             self.fixed_corner_values_deg[idx] = interior
             self.fixed_corners[idx] = True
+            self.adjustable_corners[idx] = False
             if callable(show_status):
                 show_status(f"Ecke {idx + 1} fixiert ({self.format_angle(interior)})", 4000)
         else:
             self.fixed_corners[idx] = False
             self.fixed_corner_values_deg[idx] = None
+            self.adjustable_corners[idx] = False
             if callable(show_status):
                 show_status(f"Ecke {idx + 1} gelöst", 3000)
+        self._update_constraint_reference()
         self.solve_constraints()
-
     def toggle_debug_overlay(self, state: bool | None = None):
         if state is None:
             self.show_debug_overlay = not self.show_debug_overlay
@@ -1269,42 +1321,78 @@ class CADCanvas(QtWidgets.QWidget):
         self.update()
 
     def _apply_side_length_change(self, idx, new_len_mm):
+        # Niemals gesperrte Punkte bewegen
+        self._update_point_lock_status()
+        a_idx = idx
+        b_idx = (idx + 1) % 4
         if self.fixed_sides[idx]:
             return
-        a, b = self.quad[idx], self.quad[(idx + 1) % 4]
-        vec = (b[0] - a[0], b[1] - a[1])
-        old_len = math.hypot(*vec)
-        if old_len == 0:
+
+        a = list(self.quad[a_idx])
+        b = list(self.quad[b_idx])
+        cur_len_px = dist(a, b)
+        if cur_len_px < 1e-12:
             return
-        scale = (new_len_mm * self.px_per_mm) / old_len
-        b_new = (a[0] + vec[0] * scale, a[1] + vec[1] * scale)
-        self.quad[(idx + 1) % 4] = b_new
+
+        target_px = mm_to_px(new_len_mm, self.effective_px_per_mm())
+        r = target_px / cur_len_px
+        dx = b[0] - a[0]
+        dy = b[1] - a[1]
+
+        a_locked = self.point_locked[a_idx]
+        b_locked = self.point_locked[b_idx]
+
+        # Nur den NICHT gesperrten Endpunkt bewegen. Sind beide gesperrt → keine Änderung.
+        if not b_locked and a_locked:
+            b = (a[0] + dx * r, a[1] + dy * r)
+            self.quad[b_idx] = b
+        elif not a_locked and b_locked:
+            a = (b[0] - dx * r, b[1] - dy * r)
+            self.quad[a_idx] = a
+        elif not a_locked and not b_locked:
+            # Falls beide frei sind, Endpunkt b verschieben (deterministisch)
+            b = (a[0] + dx * r, a[1] + dy * r)
+            self.quad[b_idx] = b
+        else:
+            return  # beide gesperrt
+
         self.solve_constraints()
 
     def _apply_corner_angle_change(self, idx, new_angle_deg):
+        # Niemals gesperrte Punkte bewegen
+        self._update_point_lock_status()
         if self.fixed_corners[idx]:
             return
-        prev = self.quad[(idx + 3) % 4]
-        cur = self.quad[idx]
-        nxt = self.quad[(idx + 1) % 4]
-        v_prev = (prev[0] - cur[0], prev[1] - cur[1])
-        v_next = (nxt[0] - cur[0], nxt[1] - cur[1])
-        len_prev = math.hypot(*v_prev)
-        len_next = math.hypot(*v_next)
-        if len_prev == 0 or len_next == 0:
+
+        prev_idx = (idx + 3) % 4
+        cur_idx  = idx
+        next_idx = (idx + 1) % 4
+
+        prev = list(self.quad[prev_idx])
+        cur  = list(self.quad[cur_idx])
+        nxt  = list(self.quad[next_idx])
+
+        cur_ang = self._interior_angle(prev, cur, nxt)
+        delta = new_angle_deg - cur_ang
+        if abs(delta) < 1e-6:
             return
-        current_signed = angle_signed(prev, cur, nxt)
-        current_interior = 360 - current_signed if current_signed > 180 else current_signed
-        delta = math.radians(new_angle_deg - current_interior)
-        sign = -1.0 if current_signed > 180 else 1.0
-        cosd = math.cos(sign * delta)
-        sind = math.sin(sign * delta)
-        rx = v_next[0] * cosd - v_next[1] * sind
-        ry = v_next[0] * sind + v_next[1] * cosd
-        new_nxt = (cur[0] + rx, cur[1] + ry)
-        self.quad[(idx + 1) % 4] = new_nxt
+        rad = math.radians(delta)
+
+        prev_locked = self.point_locked[prev_idx]
+        cur_locked  = self.point_locked[cur_idx]
+        next_locked = self.point_locked[next_idx]
+
+        # Wir rotieren ausschließlich den NICHT gesperrten Nachbarn um die Ecke 'cur'
+        if not next_locked:
+            nxt = self._rotate_point(cur, nxt, rad)
+            self.quad[next_idx] = nxt
+        elif not prev_locked:
+            prev = self._rotate_point(cur, prev, -rad)
+            self.quad[prev_idx] = prev
+        else:
+            return  # beide Nachbarn gesperrt → keine Änderung
+
         self.solve_constraints()
-        self._realign_to_initial_position()
 
     def _interior_angle(self, a, b, c):
         v1 = (a[0] - b[0], a[1] - b[1])
@@ -1343,130 +1431,160 @@ class CADCanvas(QtWidgets.QWidget):
             used.add(best_idx)
         return ordered if len(ordered) == 4 else list(new_quad)
 
+    def _hard_enforce_fixed_constraints(self):
+        """Zwinge alle fixierten Längen/Winkel exakt durch."""
+        if not self.quad:
+            return
+
+        self._update_point_lock_status()
+        px_per_mm = self.effective_px_per_mm()
+        if px_per_mm <= 0:
+            return
+
+        quad = [list(p) for p in self.quad]
+
+        len_tol_mm = 0.01
+        angle_tol_deg = 0.01
+
+        for _ in range(5):
+            max_len_err = 0.0
+            # Feste Seiten erzwingen
+            for i in range(4):
+                if self.fixed_sides[i] and self.fixed_side_values_mm[i] is not None:
+                    a_idx = i
+                    b_idx = (i + 1) % 4
+                    a = quad[a_idx]
+                    b = quad[b_idx]
+                    cur_len = math.hypot(b[0] - a[0], b[1] - a[1])
+                    if cur_len < 1e-12:
+                        continue
+                    target_px = mm_to_px(self.fixed_side_values_mm[i], px_per_mm)
+                    err_mm = abs(px_to_mm(cur_len, px_per_mm) - self.fixed_side_values_mm[i])
+                    max_len_err = max(max_len_err, err_mm)
+                    r = target_px / cur_len
+                    dx = b[0] - a[0]
+                    dy = b[1] - a[1]
+                    a_locked = self.point_locked[a_idx]
+                    b_locked = self.point_locked[b_idx]
+                    if not b_locked:
+                        b[0] = a[0] + dx * r
+                        b[1] = a[1] + dy * r
+                    elif not a_locked:
+                        a[0] = b[0] - dx * r
+                        a[1] = b[1] - dy * r
+
+            max_ang_err = 0.0
+            # Feste Winkel erzwingen
+            for i in range(4):
+                if self.fixed_corners[i] and self.fixed_corner_values_deg[i] is not None:
+                    prev_idx = (i + 3) % 4
+                    cur_idx = i
+                    next_idx = (i + 1) % 4
+                    prev = quad[prev_idx]
+                    cur = quad[cur_idx]
+                    nxt = quad[next_idx]
+                    cur_ang = self._interior_angle(prev, cur, nxt)
+                    delta = self.fixed_corner_values_deg[i] - cur_ang
+                    max_ang_err = max(max_ang_err, abs(delta))
+                    if abs(delta) < angle_tol_deg:
+                        continue
+                    rad = math.radians(delta)
+                    next_locked = self.point_locked[next_idx]
+                    prev_locked = self.point_locked[prev_idx]
+                    if not next_locked:
+                        new_pt = self._rotate_point(cur, nxt, rad)
+                        nxt[0], nxt[1] = new_pt[0], new_pt[1]
+                    elif not prev_locked:
+                        new_pt = self._rotate_point(cur, prev, -rad)
+                        prev[0], prev[1] = new_pt[0], new_pt[1]
+
+            if max_len_err <= len_tol_mm and max_ang_err <= angle_tol_deg:
+                break
+
+        # Zusätzliche Schleife erzwingt exakte Fixierungen
+        for _ in range(5):
+            max_len_err = 0.0
+            for i in range(4):
+                if not (self.fixed_sides[i] and self.fixed_side_values_mm[i] is not None):
+                    continue
+                a_idx = i
+                b_idx = (i + 1) % 4
+                a = quad[a_idx]
+                b = quad[b_idx]
+                vec_x = b[0] - a[0]
+                vec_y = b[1] - a[1]
+                cur_len = math.hypot(vec_x, vec_y)
+                if cur_len < 1e-12:
+                    continue
+                target_px = mm_to_px(self.fixed_side_values_mm[i], px_per_mm)
+                err_mm = px_to_mm(cur_len, px_per_mm) - self.fixed_side_values_mm[i]
+                max_len_err = max(max_len_err, abs(err_mm))
+                if abs(err_mm) <= len_tol_mm:
+                    continue
+                scale = target_px / cur_len
+                dx = vec_x * scale
+                dy = vec_y * scale
+                if not self.point_locked[b_idx]:
+                    b[0] = a[0] + dx
+                    b[1] = a[1] + dy
+                elif not self.point_locked[a_idx]:
+                    a[0] = b[0] - dx
+                    a[1] = b[1] - dy
+
+            max_ang_err = 0.0
+            for i in range(4):
+                if not (self.fixed_corners[i] and self.fixed_corner_values_deg[i] is not None):
+                    continue
+                prev_idx = (i + 3) % 4
+                cur_idx = i
+                next_idx = (i + 1) % 4
+                prev = quad[prev_idx]
+                cur = quad[cur_idx]
+                nxt = quad[next_idx]
+                cur_ang = self._interior_angle(prev, cur, nxt)
+                delta = self.fixed_corner_values_deg[i] - cur_ang
+                max_ang_err = max(max_ang_err, abs(delta))
+                if abs(delta) <= angle_tol_deg:
+                    continue
+                rad = math.radians(delta)
+                if not self.point_locked[next_idx]:
+                    new_pt = self._rotate_point(cur, nxt, rad)
+                    quad[next_idx][0], quad[next_idx][1] = new_pt[0], new_pt[1]
+                elif not self.point_locked[prev_idx]:
+                    new_pt = self._rotate_point(cur, prev, -rad)
+                    quad[prev_idx][0], quad[prev_idx][1] = new_pt[0], new_pt[1]
+
+            if max_len_err <= len_tol_mm and max_ang_err <= angle_tol_deg:
+                break
+
+        self.quad = [tuple(p) for p in quad]
+        # Aktualisiere gespeicherte Pixellängen für fixierte Seiten
+        for i in range(4):
+            if self.fixed_sides[i]:
+                self.fixed_side_values_px[i] = dist(self.quad[i], self.quad[(i + 1) % 4])
+            else:
+                self.fixed_side_values_px[i] = None
+
+        self._last_user_lines_signature = None
+        self._realign_to_initial_position()
+
     def solve_constraints(self):
         if not self.quad or self._is_solving_constraints:
             return
+        self._update_point_lock_status()
         self._is_solving_constraints = True
         try:
             self._solve_constraints_impl()
+            self._hard_enforce_fixed_constraints()
+            self._update_constraint_reference()
         finally:
             self._is_solving_constraints = False
 
-    def reconstruct_from_constraints(self):
-        if self._in_reconstruct:
-            return
-        self._in_reconstruct = True
-        try:
-            prev_quad_state = [tuple(p) for p in self.quad] if self.quad else None
-            prev_initial_state = [tuple(p) for p in self.initial_quad] if self.initial_quad else None
-            prev_side_px = list(self.fixed_side_values_px)
-            px_per_mm = self.effective_px_per_mm()
-            if px_per_mm <= 0:
-                return
-            side_values_mm = [self.fixed_side_values_mm[i] if self.fixed_sides[i] and self.fixed_side_values_mm[i] is not None else None for i in range(4)]
-            angle_values = [self.fixed_corner_values_deg[i] if self.fixed_corners[i] and self.fixed_corner_values_deg[i] is not None else None for i in range(4)]
-
-            # --- Nur nicht fixierte Winkel berechnen, fixierte unverändert lassen ---
-            missing_angles = [i for i, val in enumerate(angle_values) if val is None]
-            known_sum = sum(val for val in angle_values if val is not None)
-            remaining = 360.0 - known_sum
-
-            # Verteile den Rest gleichmäßig auf unfixierte Winkel
-            if missing_angles:
-                avg_rest = max(1.0, remaining / len(missing_angles))
-                for idx in missing_angles:
-                    angle_values[idx] = round(avg_rest)
-            else:
-                # Falls alle Winkel gesetzt, einfach ganzzahlig runden
-                angle_values = [round(a) for a in angle_values]
-
-            headings = [0.0]
-            for i in range(3):
-                headings.append(headings[-1] + (180.0 - angle_values[i]))
-            dirs = [(math.cos(math.radians(h)), math.sin(math.radians(h))) for h in headings[:4]]
-
-            lengths = side_values_mm[:]
-            unknown_idx = [i for i, val in enumerate(lengths) if val is None]
-            if len(unknown_idx) == 1:
-                k = unknown_idx[0]
-                sx = -sum((lengths[i] or 0.0) * dirs[i][0] for i in range(4))
-                sy = -sum((lengths[i] or 0.0) * dirs[i][1] for i in range(4))
-                dx, dy = dirs[k]
-                denom = dx * dx + dy * dy
-                if denom > 1e-9:
-                    lengths[k] = (sx * dx + sy * dy) / denom
-            elif len(unknown_idx) == 2:
-                i1, i2 = unknown_idx
-                sx = -sum((lengths[i] or 0.0) * dirs[i][0] for i in range(4))
-                sy = -sum((lengths[i] or 0.0) * dirs[i][1] for i in range(4))
-                a11, a12 = dirs[i1][0], dirs[i2][0]
-                a21, a22 = dirs[i1][1], dirs[i2][1]
-                det = a11 * a22 - a12 * a21
-                if abs(det) > 1e-9:
-                    L1 = (sx * a22 - a12 * sy) / det
-                    L2 = (-sx * a21 + a11 * sy) / det
-                    lengths[i1], lengths[i2] = L1, L2
-
-            for i in range(4):
-                val = lengths[i]
-                if val is None or val <= 0:
-                    fallback = self.fixed_side_values_mm[i] if self.fixed_side_values_mm[i] is not None else DEFAULT_SIDE_MM
-                    val = fallback
-                lengths[i] = round(max(0.1, float(val)), 0)
-
-            pts = [(0.0, 0.0)]
-            for i in range(4):
-                dx = lengths[i] * dirs[i][0] * px_per_mm
-                dy = lengths[i] * dirs[i][1] * px_per_mm
-                x, y = pts[-1]
-                pts.append((x + dx, y + dy))
-            quad = pts[:4]
-
-            closure_vec = (pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1])
-            closure_err = math.hypot(*closure_vec)
-            closure_tol_px = mm_to_px(0.25, px_per_mm)
-            if closure_err > closure_tol_px:
-                quad[3] = (quad[3][0] - closure_vec[0], quad[3][1] - closure_vec[1])
-                closure_mm = px_to_mm(closure_err, px_per_mm)
-                parent = self.parentWidget()
-                show_status = getattr(parent, "show_status_message", None) if parent is not None else None
-                if callable(show_status):  # add this
-                    show_status(f"Rekonstruktion korrigiert (Abweichung {int(round(closure_mm))} mm)", 6000)
-
-
-            cx_widget = self.width() / 2.0
-            cy_widget = self.height() / 2.0
-            min_x = min(p[0] for p in quad)
-            max_x = max(p[0] for p in quad)
-            min_y = min(p[1] for p in quad)
-            max_y = max(p[1] for p in quad)
-            quad = [(p[0] + (cx_widget - (min_x + max_x) / 2.0),
-                     p[1] + (cy_widget - (min_y + max_y) / 2.0)) for p in quad]
-
-            quad = self._align_quad_order(quad)
-            self.quad = [tuple(p) for p in quad]
-            self.initial_quad = [tuple(p) for p in self.quad]
-            for i in range(4):
-                a = self.quad[i]
-                b = self.quad[(i + 1) % 4]
-                if self.fixed_sides[i]:
-                    self.fixed_side_values_px[i] = dist(a, b)
-                else:
-                    self.fixed_side_values_px[i] = None
-            self._last_user_lines_signature = None
-            self._recalc_user_lines()
-            self.auto_adjust_scale_if_needed(enforce_constraints=False)
-            if not self._validate_constraint_accuracy() and prev_quad_state is not None:
-                self.quad = prev_quad_state
-                self.initial_quad = prev_initial_state
-                self.fixed_side_values_px = prev_side_px
-                self._last_user_lines_signature = None
-                self._recalc_user_lines()
-                self.update()
-                return
-            self.update()
-        finally:
-            self._in_reconstruct = False
+    def _update_point_lock_status(self):
+        self.point_locked = [False, False, False, False]
+        for i in range(4):
+            if self.fixed_corners[i]:
+                self.point_locked[i] = True
 
     def _notify_solver_issue(self, side_error_mm: float, angle_error_deg: float):
         msg = ("Fixierungen konnten nicht exakt gelöst werden "
@@ -1501,189 +1619,98 @@ class CADCanvas(QtWidgets.QWidget):
         return True
 
     def _solve_constraints_impl(self):
-        fixed_side_flags = [self.fixed_sides[i] and self.fixed_side_values_mm[i] is not None for i in range(4)]
-        fixed_corner_flags = [self.fixed_corners[i] and self.fixed_corner_values_deg[i] is not None for i in range(4)]
-        n_fixed_sides = sum(fixed_side_flags)
-        n_fixed_corners = sum(fixed_corner_flags)
-        total_constraints = n_fixed_sides + n_fixed_corners
-
-        prev_quad_state = [tuple(p) for p in self.quad] if self.quad else None
-        prev_initial_state = [tuple(p) for p in self.initial_quad] if self.initial_quad else None
-        prev_side_px = list(self.fixed_side_values_px)
-
-        if total_constraints >= 4:
-            self.reconstruct_from_constraints()
+        """
+        Neues deterministisches Constraint-System:
+        - Berücksichtigt ausschließlich 'veränderbare' Seiten und Ecken.
+        - Fixierte Punkte bleiben 100 % stabil.
+        - Keine iterative Anpassung mehr.
+        """
+        if not self.quad:
             return
 
-        quad = [list(p) for p in self.quad]
         px_per_mm = self.effective_px_per_mm()
+        quad = [list(p) for p in self.quad]
 
-        fixed_angles = [self.fixed_corner_values_deg[i] if fixed_corner_flags[i] else None for i in range(4)]
-        if sum(val is not None for val in fixed_angles) == 3:
-            missing_idx = [i for i, val in enumerate(fixed_angles) if val is None][0]
-            total = sum(val for val in fixed_angles if val is not None)
-            target = max(1.0, min(179.0, 360.0 - total))
-            self.fixed_corners[missing_idx] = True
-            self.fixed_corner_values_deg[missing_idx] = target
-            fixed_corner_flags[missing_idx] = True
+        # Schritt 1: Punkt-Sperren vorbereiten
+        self._update_point_lock_status()
 
-        def edge_length(a, b):
-            return math.hypot(b[0] - a[0], b[1] - a[1])
-
-        vertex_locked = [False] * 4
-        for v in range(4):
-            if fixed_corner_flags[v]:
-                vertex_locked[v] = True
-        for v in range(4):
-            if fixed_side_flags[v] and fixed_side_flags[(v - 1) % 4]:
-                vertex_locked[v] = True
-
-        stalled = False
-        for _ in range(400):
-            changed = False
-            total_move = 0.0
-
-            for i in range(4):
-                if not fixed_side_flags[i]:
-                    continue
-                cur = quad[i]
-                nxt = quad[(i + 1) % 4]
-                target_len_px = mm_to_px(self.fixed_side_values_mm[i], px_per_mm)
-                cur_len = edge_length(cur, nxt)
-                if cur_len < 1e-9:
-                    continue
-                err = target_len_px - cur_len
-                if px_to_mm(abs(err), px_per_mm) < 0.01:
-                    continue
-
-                step_ratio = max(0.05, min(0.35, abs(err) / max(1.0, target_len_px)))
-                ratio = 1.0 + step_ratio * (1 if err > 0 else -1)
-
-                if not vertex_locked[i] and not vertex_locked[(i + 1) % 4]:
-                    midx = (cur[0] + nxt[0]) * 0.5
-                    midy = (cur[1] + nxt[1]) * 0.5
-                    ux = (nxt[0] - cur[0]) / cur_len
-                    uy = (nxt[1] - cur[1]) / cur_len
-                    half = 0.5 * cur_len * ratio
-                    new_cur = (midx - ux * half, midy - uy * half)
-                    new_nxt = (midx + ux * half, midy + uy * half)
-                    total_move += dist(cur, new_cur) + dist(nxt, new_nxt)
-                    quad[i] = list(new_cur)
-                    quad[(i + 1) % 4] = list(new_nxt)
-                    changed = True
-                elif not vertex_locked[(i + 1) % 4]:
-                    new_nxt = (cur[0] + (nxt[0] - cur[0]) * ratio, cur[1] + (nxt[1] - cur[1]) * ratio)
-                    total_move += dist(nxt, new_nxt)
-                    quad[(i + 1) % 4] = list(new_nxt)
-                    changed = True
-                elif not vertex_locked[i]:
-                    new_cur = (nxt[0] + (cur[0] - nxt[0]) * ratio, nxt[1] + (cur[1] - nxt[1]) * ratio)
-                    total_move += dist(cur, new_cur)
-                    quad[i] = list(new_cur)
-                    changed = True
-
-            for i in range(4):
-                if not fixed_corner_flags[i]:
-                    continue
-
-                prev = quad[(i - 1) % 4]
-                cur = quad[i]
-                nxt = quad[(i + 1) % 4]
-
-                cur_ang = self._interior_angle(prev, cur, nxt)
-                target = max(1.0, min(179.0, self.fixed_corner_values_deg[i]))
-                err_deg = target - cur_ang
-                if abs(err_deg) < 0.01:
-                    continue
-
-                step = math.radians(max(0.2, min(5.0, abs(err_deg) * 0.25)))
-
-                candidates = []
-                if not vertex_locked[(i + 1) % 4]:
-                    candidates.append(((i + 1) % 4, self._rotate_point(cur, nxt, step)))
-                    candidates.append(((i + 1) % 4, self._rotate_point(cur, nxt, -step)))
-                if not vertex_locked[(i - 1) % 4]:
-                    candidates.append(((i - 1) % 4, self._rotate_point(cur, prev, -step)))
-                    candidates.append(((i - 1) % 4, self._rotate_point(cur, prev, step)))
-
-                if not candidates:
-                    continue
-
-                best_err = float('inf')
-                best_apply = None
-                for idx_move, new_pt in candidates:
-                    test = [list(p) for p in quad]
-                    test[idx_move] = list(new_pt)
-                    a = test[(i - 1) % 4]
-                    b = test[i]
-                    c = test[(i + 1) % 4]
-                    new_ang = self._interior_angle(a, b, c)
-                    e = abs(target - new_ang)
-                    if e < best_err:
-                        best_err = e
-                        best_apply = (idx_move, new_pt)
-
-                if best_apply:
-                    idx_move, new_pt = best_apply
-                    total_move += dist(quad[idx_move], new_pt)
-                    quad[idx_move] = list(new_pt)
-                    changed = True
-
-            if not changed or total_move < 0.03:
-                stalled = True
-                break
-
-        side_error_mm = 0.0
-        angle_error_deg = 0.0
+        # Schritt 2: Nur veränderbare Seiten bearbeiten
         for i in range(4):
-            if fixed_side_flags[i]:
-                cur_len_mm = px_to_mm(edge_length(quad[i], quad[(i + 1) % 4]), px_per_mm)
-                err_mm = abs(cur_len_mm - self.fixed_side_values_mm[i])
-                side_error_mm = max(side_error_mm, err_mm)
-            if fixed_corner_flags[i]:
-                prev = quad[(i - 1) % 4]
-                cur = quad[i]
-                nxt = quad[(i + 1) % 4]
-                cur_ang = self._interior_angle(prev, cur, nxt)
-                err_deg = abs(cur_ang - self.fixed_corner_values_deg[i])
-                angle_error_deg = max(angle_error_deg, err_deg)
+            if (self.fixed_sides[i]
+                    or not self.adjustable_sides[i]
+                    or self.side_lengths[i] <= 0):
+                continue
+            a_idx = i
+            b_idx = (i + 1) % 4
+            a = quad[a_idx]
+            b = quad[b_idx]
+            cur_len = math.hypot(b[0] - a[0], b[1] - a[1])
+            if cur_len < 1e-9:
+                continue
+            target_px = mm_to_px(self.side_lengths[i], px_per_mm)
+            r = target_px / cur_len
+            dx = b[0] - a[0]
+            dy = b[1] - a[1]
+            if not self.point_locked[b_idx]:
+                b[0] = a[0] + dx * r
+                b[1] = a[1] + dy * r
+            elif not self.point_locked[a_idx]:
+                a[0] = b[0] - dx * r
+                a[1] = b[1] - dy * r
 
-        if stalled and (side_error_mm > 0.05 or angle_error_deg > 0.1):
-            if total_constraints >= 4:
-                self.reconstruct_from_constraints()
-            else:
-                self._notify_solver_issue(side_error_mm, angle_error_deg)
-            return
-
-        if self.initial_quad:
-            quad = self._restore_initial_orientation(quad)
-            cx_ref = sum(p[0] for p in self.initial_quad) / 4.0
-            cy_ref = sum(p[1] for p in self.initial_quad) / 4.0
-            cx = sum(p[0] for p in quad) / 4.0
-            cy = sum(p[1] for p in quad) / 4.0
-            dx, dy = cx_ref - cx, cy_ref - cy
-            quad = [[p[0] + dx, p[1] + dy] for p in quad]
-
-        ordered_quad = self._align_quad_order([tuple(p) for p in quad])
-        self.quad = [tuple(p) for p in ordered_quad]
+        # Schritt 3: Nur veränderbare Ecken bearbeiten
         for i in range(4):
-            a = self.quad[i]
-            b = self.quad[(i + 1) % 4]
-            if self.fixed_sides[i]:
-                self.fixed_side_values_px[i] = dist(a, b)
-            else:
-                self.fixed_side_values_px[i] = None
+            if self.fixed_corners[i] or not self.adjustable_corners[i]:
+                continue
+            target_angle = self.angle_values[i]
+            prev_idx = (i - 1) % 4
+            cur_idx = i
+            next_idx = (i + 1) % 4
+            prev = quad[prev_idx]
+            cur = quad[cur_idx]
+            nxt = quad[next_idx]
+            cur_ang = self._interior_angle(prev, cur, nxt)
+            delta = target_angle - cur_ang
+            if abs(delta) < 0.05:
+                continue
+            rad = math.radians(delta)
+            if not self.point_locked[next_idx]:
+                new_pt = self._rotate_point(cur, nxt, rad)
+                quad[next_idx][0], quad[next_idx][1] = new_pt[0], new_pt[1]
+            elif not self.point_locked[prev_idx]:
+                new_pt = self._rotate_point(cur, prev, -rad)
+                quad[prev_idx][0], quad[prev_idx][1] = new_pt[0], new_pt[1]
 
+        # Schritt 4: Ergebnis zurückschreiben
+        self.quad = [tuple(p) for p in quad]
         self._last_user_lines_signature = None
-        self._recalc_user_lines()
-        if not self._validate_constraint_accuracy() and prev_quad_state is not None:
-            self.quad = prev_quad_state
-            self.initial_quad = prev_initial_state
-            self.fixed_side_values_px = prev_side_px
-            self._last_user_lines_signature = None
-            self._recalc_user_lines()
+
+    # ===== Helfer hinzufügen (neu) =====
+    def _normalize_quad_to_fixed_lengths(self):
+        if not self.quad:
             return
-        self.update()
+        px_per_mm = self.effective_px_per_mm()
+        quad = [list(p) for p in self.quad]
+        for i in range(4):
+            if self.fixed_sides[i] and self.fixed_side_values_mm[i] is not None:
+                a, b = quad[i], quad[(i+1) % 4]
+                cur = math.hypot(b[0]-a[0], b[1]-a[1])
+                if cur > 1e-12:
+                    target = mm_to_px(self.fixed_side_values_mm[i], px_per_mm)
+                    r = target / cur
+                    b[0] = a[0] + (b[0]-a[0]) * r
+                    b[1] = a[1] + (b[1]-a[1]) * r
+        self.quad = [tuple(p) for p in quad]
+
+    def _center_quad_on_screen(self):
+        if not self.quad:
+            return
+        cx = sum(p[0] for p in self.quad) / 4.0
+        cy = sum(p[1] for p in self.quad) / 4.0
+        dx = self.width()/2.0  - cx
+        dy = self.height()/2.0 - cy
+        self.quad = [(p[0]+dx, p[1]+dy) for p in self.quad]
+
     def _restore_initial_orientation(self, quad):
         if not self.initial_quad or len(quad) != 4:
             return quad
@@ -1738,7 +1765,6 @@ class CADCanvas(QtWidgets.QWidget):
         self._recalc_user_lines()
         self.update()
 
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1761,7 +1787,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().addPermanentWidget(version_label, 1)
 
         QtCore.QTimer.singleShot(0, self._go_fullscreen)
-        self.show()
         QtCore.QTimer.singleShot(2000, lambda: check_for_updates_threaded(self))
 
     def _go_fullscreen(self):
@@ -1869,7 +1894,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "   und fixieren.<br>"
             "- Um einen fixierten Wert zu ändern, muss die Fixierung zuerst gelöst werden.<br>"
             "<br>"
-            "Fixierte Seiten/Ecken sind orange markiert und koennen nicht bewegt werden, solange sie fixiert sind."
+            "Fixierte Seiten/Ecken sind orange markiert und können nicht bewegt werden, solange sie fixiert sind."
         )
         dlg = QtWidgets.QMessageBox(self)
         dlg.setWindowTitle("Hilfe / Bedienung")
@@ -1883,7 +1908,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if os.path.exists(updater_path):
             QtWidgets.QMessageBox.information(
                 self,
-                "Update verfuegbar",
+                "Update verfügbar",
                 f"Neue Version {latest_version} gefunden!\n\nDas Programm wird geschlossen und der Updater gestartet."
             )
             try:
