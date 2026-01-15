@@ -8,7 +8,7 @@ use eframe::egui;
 async fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_fullscreen(true)
+            .with_inner_size([1600.0, 900.0])
             .with_title("Einfache CAD App für Vierecke"),
         ..Default::default()
     };
