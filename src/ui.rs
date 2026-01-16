@@ -230,16 +230,6 @@ impl eframe::App for CadApp {
                                                     ui.label(format!("  D: {}°", format_angle_with_comma(d)));
                                                 }
                                             });
-                                            
-                                            ui.add_space(10.0);
-                                            ui.colored_label(
-                                                Color32::from_rgb(0, 150, 0),
-                                                "✓ Präzision: Mikrometer-genau"
-                                            );
-                                            ui.colored_label(
-                                                Color32::from_rgb(0, 150, 0),
-                                                "  Für Metallbau verwendbar."
-                                            );
                                         });
                                 });
                         }
@@ -595,7 +585,7 @@ impl CadApp {
                 egui::Align2::CENTER_CENTER,
                 formatted,
                 egui::FontId::proportional(20.0),
-                line_color,
+                Color32::from_rgb(56, 62, 66),  //Anthrazit
             );
 
             painter.circle_filled(start_screen, 4.0, Color32::from_rgb(255, 200, 0));
@@ -604,7 +594,7 @@ impl CadApp {
                 egui::Align2::LEFT_BOTTOM,
                 format!("{}°", format_angle_with_comma(line.start_angle)),
                 egui::FontId::proportional(16.0),
-                Color32::from_rgb(255, 150, 0),
+                Color32::from_rgb(56, 62, 66),  //Anthrazit
             );
 
             painter.circle_filled(end_screen, 4.0, Color32::from_rgb(255, 200, 0));
@@ -613,7 +603,7 @@ impl CadApp {
                 egui::Align2::LEFT_BOTTOM,
                 format!("{}°", format_angle_with_comma(line.end_angle)),
                 egui::FontId::proportional(16.0),
-                Color32::from_rgb(255, 150, 0),
+                Color32::from_rgb(56, 62, 66),  //Anthrazit
             );
 
             let start_side_idx = line.start_side;
