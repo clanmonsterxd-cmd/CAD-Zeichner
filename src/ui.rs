@@ -68,6 +68,15 @@ impl Default for CadApp {
     }
 }
 
+// ========== HILFSFUNKTION: KOMMA-FORMATIERUNG ==========
+fn format_with_comma(value: f64) -> String {
+    format!("{:.3}", value).replace('.', ",")
+}
+
+fn format_angle_with_comma(value: f64) -> String {
+    format!("{:.3}", value).replace('.', ",")
+}
+
 impl eframe::App for CadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Linkes Panel für Eingaben mit Scrollbar
@@ -79,7 +88,7 @@ impl eframe::App for CadApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        ui.heading("📐 Viereck-Maße");
+                        ui.heading("🔍 Viereck-Maße");
                         ui.separator();
 
                         // === EINGABE SECTION ===
@@ -133,7 +142,7 @@ impl eframe::App for CadApp {
 
                         ui.add_space(15.0);
                         
-                        // Berechnen-Button (größer und auffälliger)
+                        // Berechnen-Button
                         let calc_button = egui::Button::new(
                             egui::RichText::new("🔢 Berechnen")
                                 .size(24.0)
@@ -159,7 +168,6 @@ impl eframe::App for CadApp {
                                             ui.label("✅ Geometrisch korrekte Werte:");
                                             ui.add_space(8.0);
                                             
-                                            // Bestimme einheitliche Darstellung
                                             let max_length_um = [
                                                 self.quad.side_ab_um.unwrap_or(0),
                                                 self.quad.side_bc_um.unwrap_or(0),
@@ -173,33 +181,33 @@ impl eframe::App for CadApp {
                                                 ui.label(egui::RichText::new("Seitenlängen:").strong());
                                                 if let Some(mm) = self.quad.get_side_mm("AB") {
                                                     let formatted = if use_cm {
-                                                        format!("{:.3} cm", mm / 10.0)
+                                                        format!("{} cm", format_with_comma(mm / 10.0))
                                                     } else {
-                                                        format!("{:.4} m", mm / 1000.0)
+                                                        format!("{} m", format_with_comma(mm / 1000.0))
                                                     };
                                                     ui.label(format!("  AB: {}", formatted));
                                                 }
                                                 if let Some(mm) = self.quad.get_side_mm("BC") {
                                                     let formatted = if use_cm {
-                                                        format!("{:.3} cm", mm / 10.0)
+                                                        format!("{} cm", format_with_comma(mm / 10.0))
                                                     } else {
-                                                        format!("{:.4} m", mm / 1000.0)
+                                                        format!("{} m", format_with_comma(mm / 1000.0))
                                                     };
                                                     ui.label(format!("  BC: {}", formatted));
                                                 }
                                                 if let Some(mm) = self.quad.get_side_mm("CD") {
                                                     let formatted = if use_cm {
-                                                        format!("{:.3} cm", mm / 10.0)
+                                                        format!("{} cm", format_with_comma(mm / 10.0))
                                                     } else {
-                                                        format!("{:.4} m", mm / 1000.0)
+                                                        format!("{} m", format_with_comma(mm / 1000.0))
                                                     };
                                                     ui.label(format!("  CD: {}", formatted));
                                                 }
                                                 if let Some(mm) = self.quad.get_side_mm("DA") {
                                                     let formatted = if use_cm {
-                                                        format!("{:.3} cm", mm / 10.0)
+                                                        format!("{} cm", format_with_comma(mm / 10.0))
                                                     } else {
-                                                        format!("{:.4} m", mm / 1000.0)
+                                                        format!("{} m", format_with_comma(mm / 1000.0))
                                                     };
                                                     ui.label(format!("  DA: {}", formatted));
                                                 }
@@ -210,16 +218,16 @@ impl eframe::App for CadApp {
                                             ui.group(|ui| {
                                                 ui.label(egui::RichText::new("Innenwinkel:").strong());
                                                 if let Some(a) = self.quad.angle_a {
-                                                    ui.label(format!("  A: {:.3}°", a));
+                                                    ui.label(format!("  A: {}°", format_angle_with_comma(a)));
                                                 }
                                                 if let Some(b) = self.quad.angle_b {
-                                                    ui.label(format!("  B: {:.3}°", b));
+                                                    ui.label(format!("  B: {}°", format_angle_with_comma(b)));
                                                 }
                                                 if let Some(c) = self.quad.angle_c {
-                                                    ui.label(format!("  C: {:.3}°", c));
+                                                    ui.label(format!("  C: {}°", format_angle_with_comma(c)));
                                                 }
                                                 if let Some(d) = self.quad.angle_d {
-                                                    ui.label(format!("  D: {:.3}°", d));
+                                                    ui.label(format!("  D: {}°", format_angle_with_comma(d)));
                                                 }
                                             });
                                             
@@ -246,7 +254,6 @@ impl eframe::App for CadApp {
 
                         ui.add_space(10.0);
                         
-                        // Update-Button
                         if self.checking_update {
                             ui.add(egui::Spinner::new());
                             ui.label("Prüfe Updates...");
@@ -264,7 +271,6 @@ impl eframe::App for CadApp {
                         ui.add_space(20.0);
                         ui.separator();
                         
-                        // Großer roter Schließen-Button am Ende
                         ui.add_space(10.0);
                         let close_button = egui::Button::new(
                             egui::RichText::new("❌ App schließen")
@@ -280,7 +286,6 @@ impl eframe::App for CadApp {
                     });
             });
 
-        // Hauptbereich für Visualisierung
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.calculated {
                 self.draw_quadrilateral(ui);
@@ -292,7 +297,7 @@ impl eframe::App for CadApp {
             }
         });
 
-        // Fehler-Dialog (Popup)
+        // Fehler-Dialog
         if self.error_message.is_some() {
             let error_text = self.error_message.clone().unwrap();
             
@@ -324,32 +329,17 @@ impl eframe::App for CadApp {
             egui::Window::new("❓ Hilfe")
                 .collapsible(false)
                 .show(ctx, |ui| {
-                    ui.label("🖱️ Maus-Steuerung:");
-                    ui.add_space(5.0);
-                    
-                    ui.label("📏 Eigene Linien zeichnen:");
-                    ui.label("  • Linke Maustaste auf einer Seite gedrückt halten");
-                    ui.label("  • Maus zur Zielseite bewegen (Preview wird angezeigt)");
-                    ui.label("  • Maustaste loslassen = Linie wird gezeichnet");
+                    ui.label("📏 Linien zeichnen:");
+                    ui.label("  Klicken & Ziehen von Seite zu Seite");
                     ui.add_space(5.0);
                     
                     ui.label("✏️ Linien verschieben:");
-                    ui.label("  • Mit Maus über Linie hovern (wird orange)");
-                    ui.label("  • Klicken und ziehen um Linie zu verschieben");
+                    ui.label("  Endpunkt anklicken & ziehen");
                     ui.add_space(5.0);
                     
-                    ui.label("📊 Was wird angezeigt:");
-                    ui.label("  • Länge der Linie (Mitte)");
-                    ui.label("  • Schnittwinkel (an beiden Enden)");
-                    ui.label("  • Segment-Längen (Abstand zu Ecken)");
-                    
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.label("📐 Eingabe:");
-                    ui.label("• Alle Maße werden intern in µm gerechnet");
-                    ui.label("• Anzeige erfolgt in cm oder m (je nach Größe)");
-                    ui.label("• Mindestens 3 Seiten + 1 Winkel nötig");
-                    ui.label("  ODER 4 Seiten + 1 Winkel");
+                    ui.label("🔢 Eingabe:");
+                    ui.label("  4 Seiten + 1 Winkel");
+                    ui.label("  oder 3 Seiten + 2 Winkel");
                     
                     ui.add_space(10.0);
                     if ui.button("Schließen").clicked() {
@@ -364,10 +354,9 @@ impl eframe::App for CadApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    // Clone update_info to avoid borrow conflict
                     let update_info_guard = self.update_info.lock().unwrap();
                     let info_clone = update_info_guard.clone();
-                    drop(update_info_guard); // Release lock immediately
+                    drop(update_info_guard);
                     
                     if let Some(ref info) = info_clone {
                         if info.available {
@@ -408,32 +397,51 @@ impl CadApp {
     fn calculate_quadrilateral(&mut self) {
         self.error_message = None;
         
-        // Parse Eingaben und konvertiere zu Mikrometer
+        // Setze ALLE Werte zurück, damit leere Felder auch wirklich None werden
+        self.quad.side_ab_um = None;
+        self.quad.side_bc_um = None;
+        self.quad.side_cd_um = None;
+        self.quad.side_da_um = None;
+        self.quad.angle_a = None;
+        self.quad.angle_b = None;
+        self.quad.angle_c = None;
+        self.quad.angle_d = None;
+        
+        // Jetzt setze nur die ausgefüllten Felder
         if !self.input_ab.is_empty() {
-            if let Ok(mm) = self.input_ab.parse::<f64>() {
+            if let Ok(mm) = self.input_ab.replace(',', ".").parse::<f64>() {
                 self.quad.set_side_mm("AB", mm);
             }
         }
         if !self.input_bc.is_empty() {
-            if let Ok(mm) = self.input_bc.parse::<f64>() {
+            if let Ok(mm) = self.input_bc.replace(',', ".").parse::<f64>() {
                 self.quad.set_side_mm("BC", mm);
             }
         }
         if !self.input_cd.is_empty() {
-            if let Ok(mm) = self.input_cd.parse::<f64>() {
+            if let Ok(mm) = self.input_cd.replace(',', ".").parse::<f64>() {
                 self.quad.set_side_mm("CD", mm);
             }
         }
         if !self.input_da.is_empty() {
-            if let Ok(mm) = self.input_da.parse::<f64>() {
+            if let Ok(mm) = self.input_da.replace(',', ".").parse::<f64>() {
                 self.quad.set_side_mm("DA", mm);
             }
         }
         
-        self.quad.angle_a = self.input_angle_a.parse::<f64>().ok();
-        self.quad.angle_b = self.input_angle_b.parse::<f64>().ok();
-        self.quad.angle_c = self.input_angle_c.parse::<f64>().ok();
-        self.quad.angle_d = self.input_angle_d.parse::<f64>().ok();
+        // Für Winkel: .parse().ok() gibt automatisch None bei leerem String
+        if !self.input_angle_a.is_empty() {
+            self.quad.angle_a = self.input_angle_a.replace(',', ".").parse::<f64>().ok();
+        }
+        if !self.input_angle_b.is_empty() {
+            self.quad.angle_b = self.input_angle_b.replace(',', ".").parse::<f64>().ok();
+        }
+        if !self.input_angle_c.is_empty() {
+            self.quad.angle_c = self.input_angle_c.replace(',', ".").parse::<f64>().ok();
+        }
+        if !self.input_angle_d.is_empty() {
+            self.quad.angle_d = self.input_angle_d.replace(',', ".").parse::<f64>().ok();
+        }
 
         match self.quad.calculate() {
             Ok(_) => {
@@ -451,7 +459,6 @@ impl CadApp {
         let available_size = ui.available_size();
         let (response, painter) = ui.allocate_painter(available_size, egui::Sense::click_and_drag());
 
-        // Berechne Bounding Box des Vierecks
         let mut min_x = f64::MAX;
         let mut max_x = f64::MIN;
         let mut min_y = f64::MAX;
@@ -467,13 +474,11 @@ impl CadApp {
         let width = max_x - min_x;
         let height = max_y - min_y;
         
-        // Skalierung mit mehr Padding für größere Labels
         let padding = 120.0;
         let scale_x = (available_size.x - 2.0 * padding) / width as f32;
         let scale_y = (available_size.y - 2.0 * padding) / height as f32;
         let scale = scale_x.min(scale_y);
 
-        // Zentrierung
         let offset_x = (available_size.x - width as f32 * scale) / 2.0;
         let offset_y = (available_size.y - height as f32 * scale) / 2.0;
 
@@ -484,7 +489,6 @@ impl CadApp {
             )
         };
 
-        // Zeichne Viereck mit dickeren Linien
         let screen_vertices: Vec<Pos2> = self.quad.vertices.iter().map(to_screen).collect();
         
         for i in 0..4 {
@@ -495,7 +499,6 @@ impl CadApp {
             );
         }
 
-        // Zeichne Ecken-Labels und Winkel mit größerer Schrift
         let labels = ["A", "B", "C", "D"];
         let angles = [self.quad.angle_a, self.quad.angle_b, self.quad.angle_c, self.quad.angle_d];
         
@@ -516,17 +519,15 @@ impl CadApp {
                 painter.text(
                     screen_vertices[i] + angle_offset,
                     egui::Align2::LEFT_TOP,
-                    format!("{:.3}°", angle),
+                    format!("{}°", format_angle_with_comma(angle)),
                     egui::FontId::proportional(22.0),
                     Color32::from_rgb(100, 100, 100),
                 );
             }
         }
 
-        // Zeichne Seitenlängen-Labels mit größerer Schrift und konsistenten Einheiten
         let side_names = ["AB", "BC", "CD", "DA"];
         
-        // Bestimme ob wir cm oder m verwenden
         let max_length_um = [
             self.quad.get_side_length_um(0),
             self.quad.get_side_length_um(1),
@@ -534,7 +535,7 @@ impl CadApp {
             self.quad.get_side_length_um(3),
         ].iter().fold(0_i64, |a, &b| a.max(b));
         
-        let use_cm = max_length_um < 10_000_000; // < 10m
+        let use_cm = max_length_um < 10_000_000;
         
         for i in 0..4 {
             let next = (i + 1) % 4;
@@ -543,12 +544,11 @@ impl CadApp {
                 (screen_vertices[i].y + screen_vertices[next].y) / 2.0,
             );
             
-            // Zeige die TATSÄCHLICHE geometrische Länge
             let length_mm = self.quad.get_side_length_mm(i);
             let formatted = if use_cm {
-                format!("{}: {:.3} cm", side_names[i], length_mm / 10.0)
+                format!("{}: {} cm", side_names[i], format_with_comma(length_mm / 10.0))
             } else {
-                format!("{}: {:.4} m", side_names[i], length_mm / 1000.0)
+                format!("{}: {} m", side_names[i], format_with_comma(length_mm / 1000.0))
             };
             
             painter.text(
@@ -560,15 +560,14 @@ impl CadApp {
             );
         }
 
-        // Zeichne custom lines mit dickeren Linien, Winkeln und Segmenten
+        // Zeichne custom lines
         for (idx, line) in self.custom_lines.iter().enumerate() {
             let start_screen = to_screen(&line.start);
             let end_screen = to_screen(&line.end);
             
-            // Hover-Effekt
             let is_hovered = self.hovered_line == Some(idx);
             let line_color = if is_hovered {
-                Color32::from_rgb(255, 150, 0) // Orange wenn hover
+                Color32::from_rgb(255, 150, 0)
             } else {
                 Color32::from_rgb(200, 100, 0)
             };
@@ -579,7 +578,6 @@ impl CadApp {
                 Stroke::new(line_width, line_color),
             );
 
-            // Länge in der Mitte
             let mid = Pos2::new(
                 (start_screen.x + end_screen.x) / 2.0,
                 (start_screen.y + end_screen.y) / 2.0,
@@ -587,9 +585,9 @@ impl CadApp {
             
             let length_mm = line.length_um as f64 / 1000.0;
             let formatted = if use_cm {
-                format!("{:.3} cm", length_mm / 10.0)
+                format!("{} cm", format_with_comma(length_mm / 10.0))
             } else {
-                format!("{:.4} m", length_mm / 1000.0)
+                format!("{} m", format_with_comma(length_mm / 1000.0))
             };
             
             painter.text(
@@ -600,39 +598,32 @@ impl CadApp {
                 line_color,
             );
 
-            // === SCHNITTWINKEL ANZEIGEN ===
-            
-            // Winkel am Start
             painter.circle_filled(start_screen, 4.0, Color32::from_rgb(255, 200, 0));
             painter.text(
                 start_screen + Vec2::new(15.0, -15.0),
                 egui::Align2::LEFT_BOTTOM,
-                format!("{:.1}°", line.start_angle),
+                format!("{}°", format_angle_with_comma(line.start_angle)),
                 egui::FontId::proportional(16.0),
                 Color32::from_rgb(255, 150, 0),
             );
 
-            // Winkel am Ende
             painter.circle_filled(end_screen, 4.0, Color32::from_rgb(255, 200, 0));
             painter.text(
                 end_screen + Vec2::new(15.0, -15.0),
                 egui::Align2::LEFT_BOTTOM,
-                format!("{:.1}°", line.end_angle),
+                format!("{}°", format_angle_with_comma(line.end_angle)),
                 egui::FontId::proportional(16.0),
                 Color32::from_rgb(255, 150, 0),
             );
 
-            // === SEGMENT-LÄNGEN AN SCHNITTPUNKTEN ===
-            
-            // Segment am Start (von Ecke zu Schnittpunkt)
             let start_side_idx = line.start_side;
             let start_vertex = &self.quad.vertices[start_side_idx];
             let segment_start_length_um = distance_um(start_vertex, &line.start);
             let segment_start_mm = segment_start_length_um as f64 / 1000.0;
             let segment_start_formatted = if use_cm {
-                format!("{:.2} cm", segment_start_mm / 10.0)
+                format!("{} cm", format_with_comma(segment_start_mm / 10.0))
             } else {
-                format!("{:.3} m", segment_start_mm / 1000.0)
+                format!("{} m", format_with_comma(segment_start_mm / 1000.0))
             };
             
             let segment_start_screen = Pos2::new(
@@ -648,16 +639,15 @@ impl CadApp {
                 Color32::from_rgb(150, 150, 150),
             );
 
-            // Segment am Ende
             let end_side_idx = line.end_side;
             let next_end_idx = (end_side_idx + 1) % 4;
             let end_vertex = &self.quad.vertices[next_end_idx];
             let segment_end_length_um = distance_um(&line.end, end_vertex);
             let segment_end_mm = segment_end_length_um as f64 / 1000.0;
             let segment_end_formatted = if use_cm {
-                format!("{:.2} cm", segment_end_mm / 10.0)
+                format!("{} cm", format_with_comma(segment_end_mm / 10.0))
             } else {
-                format!("{:.3} m", segment_end_mm / 1000.0)
+                format!("{} m", format_with_comma(segment_end_mm / 1000.0))
             };
             
             let segment_end_screen = Pos2::new(
@@ -673,21 +663,28 @@ impl CadApp {
                 Color32::from_rgb(150, 150, 150),
             );
         }
-// FORTSETZUNG VON ui.rs - Füge das ans Ende von Teil 1!
 
-        // Linien-Interaktion: Hover und Verschieben
+        // ========== LINIEN-INTERAKTION: HOVER UND VERSCHIEBEN ==========
         let pointer_pos = response.interact_pointer_pos();
         
-        // Hover-Erkennung
+        // Hover-Erkennung für Linien-Endpunkte
         if let Some(pos) = pointer_pos {
             self.hovered_line = None;
             
             if !self.drawing_line && self.dragging_line_idx.is_none() {
+                // Prüfe zuerst Endpunkte (höhere Priorität als Linien)
                 for (idx, line) in self.custom_lines.iter().enumerate() {
                     let start_screen = to_screen(&line.start);
                     let end_screen = to_screen(&line.end);
-                    let dist = point_to_line_distance(pos, start_screen, end_screen);
                     
+                    // Hover auf Endpunkten (größerer Radius)
+                    if (pos - start_screen).length() < 12.0 || (pos - end_screen).length() < 12.0 {
+                        self.hovered_line = Some(idx);
+                        break;
+                    }
+                    
+                    // Sonst: Hover auf der Linie selbst
+                    let dist = point_to_line_distance(pos, start_screen, end_screen);
                     if dist < 15.0 {
                         self.hovered_line = Some(idx);
                         break;
@@ -695,35 +692,36 @@ impl CadApp {
                 }
             }
 
-            // Verschieben-Logik
+            // ========== DRAG START: Endpunkt zum Verschieben auswählen ==========
             if response.drag_started() && !self.drawing_line {
-                // Prüfe ob auf eine Linie geklickt wurde
                 for (idx, line) in self.custom_lines.iter().enumerate() {
                     let start_screen = to_screen(&line.start);
                     let end_screen = to_screen(&line.end);
-                    let dist = point_to_line_distance(pos, start_screen, end_screen);
                     
-                    if dist < 15.0 {
+                    let dist_to_start = (pos - start_screen).length();
+                    let dist_to_end = (pos - end_screen).length();
+                    
+                    // Prüfe ob auf einem Endpunkt geklickt wurde
+                    if dist_to_start < 12.0 || dist_to_end < 12.0 {
                         self.dragging_line_idx = Some(idx);
-                        // Berechne Offset für smooth dragging
-                        let line_mid = Pos2::new(
-                            (start_screen.x + end_screen.x) / 2.0,
-                            (start_screen.y + end_screen.y) / 2.0,
-                        );
-                        self.drag_offset = pos - line_mid;
+                        // Merke welcher Endpunkt näher ist
+                        self.drag_offset = if dist_to_start < dist_to_end {
+                            Vec2::new(0.0, 0.0) // Start-Punkt wird verschoben
+                        } else {
+                            Vec2::new(1.0, 0.0) // End-Punkt wird verschoben (x=1 als Flag)
+                        };
                         break;
                     }
                 }
             }
 
-            // Während des Verschiebens
+            // ========== WÄHREND DES VERSCHIEBENS ==========
             if let Some(drag_idx) = self.dragging_line_idx {
                 if response.dragged() {
-                    let line = &self.custom_lines[drag_idx];
-                    let target_pos = pos - self.drag_offset;
+                    let moving_start = self.drag_offset.x == 0.0; // true = Start, false = End
                     
-                    // Finde nächste Position auf einer Seite
-                    let mut best_side = line.start_side;
+                    // Finde beste Position auf einer Seite
+                    let mut best_side = 0;
                     let mut best_ratio = 0.5;
                     let mut min_dist = f32::MAX;
                     
@@ -732,13 +730,13 @@ impl CadApp {
                         let side_start = screen_vertices[side_idx];
                         let side_end = screen_vertices[next_idx];
                         
-                        let ratio = project_point_on_line(target_pos, side_start, side_end);
+                        let ratio = project_point_on_line(pos, side_start, side_end);
                         let point_on_side = Pos2::new(
                             side_start.x + (side_end.x - side_start.x) * ratio as f32,
                             side_start.y + (side_end.y - side_start.y) * ratio as f32,
                         );
                         
-                        let dist = (target_pos - point_on_side).length();
+                        let dist = (pos - point_on_side).length();
                         if dist < min_dist {
                             min_dist = dist;
                             best_side = side_idx;
@@ -746,9 +744,66 @@ impl CadApp {
                         }
                     }
                     
-                    // Aktualisiere Linie (verschiebe parallel zur ursprünglichen Richtung)
-                    // Vereinfachung: Beide Endpunkte auf beste Seite setzen
-                    // TODO: Bessere Logik für paralleles Verschieben
+                    // Hole die aktuelle Linie
+                    let current_line = &self.custom_lines[drag_idx];
+                    
+                    // Berechne neue Punkte (nur EINEN Punkt verschieben!)
+                    let (new_start_point, new_start_side, new_start_ratio, new_end_point, new_end_side, new_end_ratio) = 
+                        if moving_start {
+                            // Verschiebe Start-Punkt, End-Punkt bleibt
+                            (
+                                self.quad.get_point_on_side(best_side, best_ratio),
+                                best_side,
+                                best_ratio,
+                                current_line.end.clone(),
+                                current_line.end_side,
+                                current_line.end_ratio
+                            )
+                        } else {
+                            // Verschiebe End-Punkt, Start-Punkt bleibt
+                            (
+                                current_line.start.clone(),
+                                current_line.start_side,
+                                current_line.start_ratio,
+                                self.quad.get_point_on_side(best_side, best_ratio),
+                                best_side,
+                                best_ratio
+                            )
+                        };
+                    
+                    let length_um = distance_um(&new_start_point, &new_end_point);
+                    
+                    // Berechne neue Schnittwinkel
+                    let start_vertex_idx = new_start_side;
+                    let start_next_idx = (new_start_side + 1) % 4;
+                    let start_angle = calculate_intersection_angle(
+                        &self.quad.vertices[start_vertex_idx],
+                        &self.quad.vertices[start_next_idx],
+                        &new_start_point,
+                        &new_end_point,
+                    );
+                    
+                    let end_vertex_idx = new_end_side;
+                    let end_next_idx = (new_end_side + 1) % 4;
+                    let end_angle = calculate_intersection_angle(
+                        &self.quad.vertices[end_vertex_idx],
+                        &self.quad.vertices[end_next_idx],
+                        &new_end_point,
+                        &new_start_point,
+                    );
+                    
+                    // Aktualisiere die Linie
+                    self.custom_lines[drag_idx] = CustomLine {
+                        start: new_start_point,
+                        end: new_end_point,
+                        length_um,
+                        start_side: new_start_side,
+                        end_side: new_end_side,
+                        start_ratio: new_start_ratio,
+                        end_ratio: new_end_ratio,
+                        start_angle,
+                        end_angle,
+                    };
                 }
             }
 
@@ -756,10 +811,9 @@ impl CadApp {
                 self.dragging_line_idx = None;
             }
 
-            // Zeichnen neuer Linien (nur wenn nicht am Verschieben)
+            // ========== ZEICHNEN NEUER LINIEN ==========
             if self.dragging_line_idx.is_none() {
                 if response.drag_started() && !self.drawing_line {
-                    // Prüfe ob auf einer Seite geklickt wurde
                     for i in 0..4 {
                         let next = (i + 1) % 4;
                         let dist = point_to_line_distance(pos, screen_vertices[i], screen_vertices[next]);
@@ -777,7 +831,6 @@ impl CadApp {
                     self.preview_end = Some(pos);
                     
                     if let Some((start_side, start_ratio, _)) = self.line_start {
-                        // Zeichne Preview
                         let start_point = self.quad.get_point_on_side(start_side, start_ratio);
                         let start_screen = to_screen(&start_point);
                         
@@ -790,7 +843,6 @@ impl CadApp {
 
                 if response.drag_stopped() && self.drawing_line {
                     if let Some((start_side, start_ratio, _)) = self.line_start {
-                        // Finde End-Seite
                         for i in 0..4 {
                             let next = (i + 1) % 4;
                             let dist = point_to_line_distance(pos, screen_vertices[i], screen_vertices[next]);
@@ -802,7 +854,6 @@ impl CadApp {
                                 let end_point = self.quad.get_point_on_side(i, end_ratio);
                                 let length_um = distance_um(&start_point, &end_point);
                                 
-                                // Berechne Schnittwinkel
                                 let start_vertex_idx = start_side;
                                 let start_next_idx = (start_side + 1) % 4;
                                 let start_angle = calculate_intersection_angle(
@@ -846,7 +897,6 @@ impl CadApp {
     }
 
     fn take_screenshot(&self) {
-        // Vereinfachte Screenshot-Funktion
         if let Ok(screens) = screenshots::Screen::all() {
             if let Some(screen) = screens.first() {
                 if let Ok(image) = screen.capture() {
@@ -880,7 +930,6 @@ impl CadApp {
             }
         });
         
-        // Warte kurz und zeige Dialog
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.checking_update = false;
         self.show_update_dialog = true;
@@ -895,7 +944,6 @@ impl CadApp {
                 tokio::spawn(async move {
                     match updater::download_and_install_update(&url).await {
                         Ok(_) => {
-                            // Neustart erforderlich
                             std::process::exit(0);
                         }
                         Err(e) => {
